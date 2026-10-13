@@ -1,0 +1,169 @@
+---
+# Локальный dev-стек проекта "mini-DWH на данных MOEX ISS".
+#
+# Сервисы:
+#   airflow_postgres - собственная БД метаданных Airflow;
+#   dwh_postgres     - БД мини-DWH (схемы raw/stg/core/mart/meta/audit);
+#   airflow-init     - одноразовый сервис: миграции метаданных + создание админа;
+#   airflow-webserver, airflow-scheduler - Airflow 2.7.0 (LocalExecutor).
+#
+# Значения вида ${VAR:-default} - это dev-заглушки, чтобы `docker compose up`
+# работал с чистого клона без ручных шагов. Секреты хранятся в .env
+# (образец - .env.example; сам .env в репозиторий не попадает).
+
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: moex-dwh-airflow:2.7.0
+  user: "${AIRFLOW_UID:-50000}:0"
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_POSTGRES_USER:-airflow}:${AIRFLOW_POSTGRES_PASSWORD:-airflow}@airflow_postgres:5432/${AIRFLOW_POSTGRES_DB:-airflow}
+    AIRFLOW__CORE__FERNET_KEY: ${FERNET_KEY:-46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=}
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${WEBSERVER_SECRET_KEY:-dev-only-secret-key}
+    AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+    AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: Europe/Moscow
+    AIRFLOW__WEBSERVER__DEFAULT_UI_TIMEZONE: Europe/Moscow
+    AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "60"
+    AIRFLOW__LOGGING__LOGGING_LEVEL: INFO
+    AIRFLOW__CORE__ENABLE_XCOM_PICKLING: "True"
+    PYTHONPATH: /opt/airflow
+    TZ: Europe/Moscow
+    # Параметры подключения к мини-DWH, которые читает код DAG'ов.
+    DWH_DB_HOST: dwh_postgres
+    DWH_DB_PORT: "5432"
+    DWH_DB_NAME: ${DWH_DB_NAME:-moex_dwh}
+    DWH_DB_USER: ${DWH_DB_USER:-dwh}
+    DWH_DB_PASSWORD: ${DWH_DB_PASSWORD:-dwh}
+    # Параметры клиента MOEX ISS API.
+    MOEX_ISS_BASE_URL: ${MOEX_ISS_BASE_URL:-https://iss.moex.com}
+    MOEX_ISS_PAGE_SIZE: ${MOEX_ISS_PAGE_SIZE:-100}
+    MOEX_ISS_TIMEOUT: ${MOEX_ISS_TIMEOUT:-30}
+    MOEX_ISS_MAX_RETRIES: ${MOEX_ISS_MAX_RETRIES:-5}
+    MOEX_ISS_BACKOFF_FACTOR: ${MOEX_ISS_BACKOFF_FACTOR:-0.5}
+    # Логин администратора Airflow, создаётся сервисом airflow-init.
+    AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER:-admin}
+    AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin}
+    AIRFLOW_ADMIN_FIRSTNAME: ${AIRFLOW_ADMIN_FIRSTNAME:-Admin}
+    AIRFLOW_ADMIN_LASTNAME: ${AIRFLOW_ADMIN_LASTNAME:-User}
+    AIRFLOW_ADMIN_EMAIL: ${AIRFLOW_ADMIN_EMAIL:-admin@example.com}
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./include:/opt/airflow/include
+    - ./scripts:/opt/airflow/scripts
+    - ./sql:/opt/airflow/sql
+    - airflow_logs:/opt/airflow/logs
+  networks:
+    - moex_net
+
+services:
+  # Собственная БД метаданных Airflow.
+  airflow_postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${AIRFLOW_POSTGRES_USER:-airflow}
+      POSTGRES_PASSWORD: ${AIRFLOW_POSTGRES_PASSWORD:-airflow}
+      POSTGRES_DB: ${AIRFLOW_POSTGRES_DB:-airflow}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${AIRFLOW_PG_HOST_PORT:-5434}:5432"
+    volumes:
+      - airflow_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${AIRFLOW_POSTGRES_USER:-airflow} -d ${AIRFLOW_POSTGRES_DB:-airflow}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - moex_net
+
+  # БД мини-DWH. Схемы raw/stg/core/mart/meta/audit создаются скриптами
+  # из ./sql при первой инициализации пустого тома данных.
+  dwh_postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${DWH_DB_USER:-dwh}
+      POSTGRES_PASSWORD: ${DWH_DB_PASSWORD:-dwh}
+      POSTGRES_DB: ${DWH_DB_NAME:-moex_dwh}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${DWH_PG_HOST_PORT:-5433}:5432"
+    volumes:
+      - dwh_postgres_data:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DWH_DB_USER:-dwh} -d ${DWH_DB_NAME:-moex_dwh}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - moex_net
+
+  # Одноразовый сервис: миграции метаданных Airflow и создание админа.
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        set -euo pipefail
+        airflow db migrate
+        airflow users create \
+          --username "$${AIRFLOW_ADMIN_USER}" \
+          --password "$${AIRFLOW_ADMIN_PASSWORD}" \
+          --firstname "$${AIRFLOW_ADMIN_FIRSTNAME}" \
+          --lastname "$${AIRFLOW_ADMIN_LASTNAME}" \
+          --role Admin \
+          --email "$${AIRFLOW_ADMIN_EMAIL}" || echo "admin user already exists"
+        echo "Airflow init completed"
+    depends_on:
+      airflow_postgres:
+        condition: service_healthy
+    restart: "no"
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "${AIRFLOW_WEB_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    depends_on:
+      airflow_postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$${HOSTNAME}\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    depends_on:
+      airflow_postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+networks:
+  moex_net:
+    driver: bridge
+
+volumes:
+  airflow_postgres_data:
+  dwh_postgres_data:
+  airflow_logs:
