@@ -1,17 +1,27 @@
 # MOEX ISS mini-DWH
 
-**Русская версия: [README_ru.md](README_ru.md)**
+**Daily MOEX quotes, from raw API responses to query-ready analytics marts.**
 
-A Data Engineer portfolio project: a small data warehouse (DWH) built on open
-data from the Moscow Exchange (MOEX ISS API). It shows the full data path from
-a raw API response to analytics marts on a small but honest stack:
-Airflow + PostgreSQL + Docker Compose + Python.
+[![Apache Airflow 2.7.0](https://img.shields.io/badge/Airflow-2.7.0-017CEE?logo=apacheairflow&logoColor=white)](https://airflow.apache.org/)
+[![PostgreSQL 15](https://img.shields.io/badge/PostgreSQL-15-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Docker Compose](https://img.shields.io/badge/Docker%20Compose-v2-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
+[![Python 3.10](https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+🇬🇧 **English (current)** · 🇷🇺 [Русский](README_ru.md)
 
 ## What it is and why
 
-Daily exchange quotes are a convenient learning domain: the data is open, the
-format is known, and the metrics (return, volatility, comparison with an index)
-need no financial background to understand.
+MOEX ISS publishes every trade of the Moscow Exchange as a free JSON API - a
+small, well-known dataset, which makes it a good fit for a warehouse you can
+read end to end. This project pulls daily quotes from that API and turns them
+into something you can actually query: clean daily prices, a star schema, and
+marts for return, volatility and index comparison.
+
+The stack is intentionally lean: **Apache Airflow 2.7.0** orchestrates the
+pipeline, **PostgreSQL 15** stores both Airflow metadata and the warehouse,
+**Docker Compose** starts the whole thing with one command, and the ETL code is
+plain **Python 3.10**.
 
 The project covers typical data-engineering tasks:
 
@@ -23,6 +33,26 @@ The project covers typical data-engineering tasks:
 - analytics marts (return, volatility, comparison with an index);
 - data-quality (DQ) checks and a freshness report;
 - orchestration with Airflow tasks and a one-command local stack.
+
+## Demo
+
+Where a stock beat the IMOEX index the most (from `mart.index_compare`):
+
+```bash
+docker compose exec dwh_postgres psql -U dwh -d moex_dwh -c \
+  "select date_key, secid, stock_return_pct, index_return_pct, excess_return_pct
+     from mart.index_compare
+    order by excess_return_pct desc nulls last limit 3;"
+```
+
+```
+ date_key | secid | stock_return_pct | index_return_pct | excess_return_pct
+----------+-------+------------------+------------------+-------------------
+ 20240118 | GAZP  |           1.5118 |          -0.2003 |            1.7121
+ 20240123 | GAZP  |           1.3549 |           0.1132 |            1.2417
+ 20240117 | LKOH  |           0.7729 |           0.1818 |            0.5911
+(3 rows)
+```
 
 ## Tech stack
 

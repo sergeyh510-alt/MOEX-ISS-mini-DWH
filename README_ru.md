@@ -1,17 +1,27 @@
 # MOEX ISS mini-DWH
 
-**English version: [README.md](README.md)**
+**Дневные котировки с Московской биржи: от сырых ответов API до готовых к запросам аналитических витрин.**
 
-Портфолио-проект Data Engineer: мини-хранилище данных (DWH) на открытых данных
-Московской биржи (MOEX ISS API). Проект показывает полный путь данных - от
-загрузки сырого ответа API до аналитических витрин - на небольшом, но честном
-стеке: Airflow + PostgreSQL + Docker Compose + Python.
+[![Apache Airflow 2.7.0](https://img.shields.io/badge/Airflow-2.7.0-017CEE?logo=apacheairflow&logoColor=white)](https://airflow.apache.org/)
+[![PostgreSQL 15](https://img.shields.io/badge/PostgreSQL-15-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Docker Compose](https://img.shields.io/badge/Docker%20Compose-v2-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
+[![Python 3.10](https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+🇷🇺 **Русский (текущий)** · 🇬🇧 [English](README.md)
 
 ## Что это и зачем
 
-Биржевые дневные котировки - удобный учебный домен: данные открытые, формат
-известный, а метрики (доходность, волатильность, сравнение с индексом) понятны
-без финансового бэкграунда.
+MOEX ISS отдаёт каждую сделку Московской биржи через бесплатный JSON API -
+небольшой и хорошо знакомый набор данных, который удобно провести через
+хранилище целиком. Проект забирает дневные котировки из этого API и превращает
+их в то, по чему действительно можно делать запросы: чистые дневные цены,
+звезду «измерения + факты» и витрины по доходности, волатильности и сравнению
+с индексом.
+
+Стек намеренно небольшой: пайплайн оркеструет **Apache Airflow 2.7.0**, данные
+хранит **PostgreSQL 15** (в нём же и метаданные Airflow), весь стек поднимается
+одной командой через **Docker Compose**, а ETL-код - обычный **Python 3.10**.
 
 Проект закрывает типовые задачи инженера данных:
 
@@ -23,6 +33,26 @@
 - аналитические витрины (доходность, волатильность, сравнение с индексом);
 - проверки качества данных (DQ) и отчёт о свежести;
 - оркестрация задачами Airflow, запуск всего стека одной командой.
+
+## Демо
+
+Где бумага сильнее всего обогнала индекс IMOEX (из `mart.index_compare`):
+
+```bash
+docker compose exec dwh_postgres psql -U dwh -d moex_dwh -c \
+  "select date_key, secid, stock_return_pct, index_return_pct, excess_return_pct
+     from mart.index_compare
+    order by excess_return_pct desc nulls last limit 3;"
+```
+
+```
+ date_key | secid | stock_return_pct | index_return_pct | excess_return_pct
+----------+-------+------------------+------------------+-------------------
+ 20240118 | GAZP  |           1.5118 |          -0.2003 |            1.7121
+ 20240123 | GAZP  |           1.3549 |           0.1132 |            1.2417
+ 20240117 | LKOH  |           0.7729 |           0.1818 |            0.5911
+(3 rows)
+```
 
 ## Стек
 
